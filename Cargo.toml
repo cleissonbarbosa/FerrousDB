@@ -1,0 +1,9 @@
+[package]
+name = "ferrous_db"
+version = "0.0.1"
+edition = "2021"
+
+[dependencies]
+serde = { version = "1.0.204", features = ["derive"] }
+time = { version = "0.3.36", features = ["formatting", "macros", "serde", "parsing"] }
+bincode = "1.3"
