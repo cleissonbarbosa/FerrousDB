@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use super::{row::Row, table::Table};
 
 #[derive(Serialize, Deserialize)]
+/// Represents the FerrousDB database.
 pub struct FerrousDB {
     tables: HashMap<String, Table>,
     is_loaded: bool,

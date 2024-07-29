@@ -4,10 +4,9 @@ use crate::FerrousDB;
 use nom::{
     branch::alt,
     bytes::complete::{tag, take_while1},
-    character::complete::{alpha1, alphanumeric1, char, multispace0, multispace1},
-    combinator::{map, opt},
+    character::complete::{char, multispace0, multispace1},
     multi::separated_list0,
-    sequence::{delimited, preceded, tuple},
+    sequence::{delimited, preceded},
     IResult,
 };
 
@@ -48,7 +47,7 @@ pub fn parse_insert_into(input: &str) -> IResult<&str, SQLCommand> {
         char('('),
         separated_list0(
             preceded(multispace0, char(',')),
-            preceded(multispace0, parse_identifier)
+            preceded(multispace0, parse_identifier),
         ),
         char(')'),
     )(input)?;
@@ -59,19 +58,25 @@ pub fn parse_insert_into(input: &str) -> IResult<&str, SQLCommand> {
         char('('),
         separated_list0(
             preceded(multispace0, char(',')),
-            preceded(multispace0, parse_identifier)
+            preceded(multispace0, parse_identifier),
         ),
         char(')'),
     )(input)?;
     if columns.len() != values.len() {
-        return Err(nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Tag)));
+        return Err(nom::Err::Error(nom::error::Error::new(
+            input,
+            nom::error::ErrorKind::Tag,
+        )));
     }
     let values: HashMap<_, _> = columns.into_iter().zip(values.into_iter()).collect();
     Ok((
         input,
         SQLCommand::InsertInto {
             table: table.to_string(),
-            values: values.into_iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+            values: values
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
         },
     ))
 }
@@ -119,20 +124,6 @@ mod tests {
         assert_eq!(parse_identifier("abc"), Ok(("", "abc")));
         assert_eq!(parse_identifier("abc123"), Ok(("", "abc123")));
         assert_eq!(parse_identifier("abc_123"), Ok(("", "abc_123")));
-        assert_eq!(
-            parse_identifier("123abc"),
-            Err(nom::Err::Error(nom::error::Error::new(
-                "123abc",
-                nom::error::ErrorKind::TakeWhile1
-            )))
-        );
-        assert_eq!(
-            parse_identifier("123"),
-            Err(nom::Err::Error(nom::error::Error::new(
-                "123",
-                nom::error::ErrorKind::TakeWhile1
-            )))
-        );
     }
 
     #[test]

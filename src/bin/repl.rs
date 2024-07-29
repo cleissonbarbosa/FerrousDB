@@ -3,6 +3,7 @@ use std::io::{self, Write};
 use ferrous_db::parser_fn::{execute_sql, parse_sql};
 use ferrous_db::FerrousDB;
 
+/// Starts a Read-Eval-Print Loop (REPL) for interacting with FerrousDB.
 pub fn repl() {
     let mut db = FerrousDB::new();
     loop {
