@@ -7,3 +7,8 @@ edition = "2021"
 serde = { version = "1.0.204", features = ["derive"] }
 time = { version = "0.3.36", features = ["formatting", "macros", "serde", "parsing"] }
 bincode = "1.3"
+nom = "7"
+
+[[bin]]
+name = "repl"
+test = false

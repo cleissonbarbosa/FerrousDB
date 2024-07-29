@@ -15,8 +15,7 @@ pub struct FerrousDB {
 }
 
 impl FerrousDB {
-    #[allow(dead_code)]
-    fn new() -> Self {
+    pub fn new() -> Self {
         FerrousDB {
             tables: HashMap::new(),
             is_loaded: false,
