@@ -1,2 +1,2 @@
-mod command;
-pub mod parser_fn;
+pub mod command;
+pub mod sql_parser;

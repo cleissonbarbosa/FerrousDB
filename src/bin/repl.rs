@@ -1,6 +1,5 @@
 use std::io::{self, Write};
 
-use ferrous_db::parser_fn::{execute_sql, parse_sql};
 use ferrous_db::FerrousDB;
 
 /// Starts a Read-Eval-Print Loop (REPL) for interacting with FerrousDB.
@@ -18,9 +17,9 @@ pub fn repl() {
             break;
         }
 
-        match parse_sql(input) {
-            Ok((_, command)) => {
-                execute_sql(&mut db, command);
+        match db.execute_sql(input) {
+            Ok(result) => {
+                println!("{}", result);
             }
             Err(err) => {
                 println!("Error parsing SQL: {:?}", err);

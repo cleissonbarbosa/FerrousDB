@@ -5,6 +5,7 @@ pub enum SQLCommand {
     CreateTable {
         name: String,
         columns: Vec<String>,
+        page_size: usize
     },
     InsertInto {
         table: String,
@@ -12,14 +13,15 @@ pub enum SQLCommand {
     },
     SelectFrom {
         table: String,
+        page: usize
     },
 }
 
 impl SQLCommand {
     pub fn to_string(&self) -> String {
         match self {
-            SQLCommand::CreateTable { name, columns } => {
-                format!("CREATE TABLE {} ({})", name, columns.join(", "))
+            SQLCommand::CreateTable { name, columns, page_size } => {
+                format!("CREATE TABLE {} ({}) PAGE SIZE {}", name, columns.join(", "), page_size)
             }
             SQLCommand::InsertInto { table, values } => {
                 let columns: Vec<String> = values.keys().map(|s| s.to_string()).collect();
@@ -31,7 +33,7 @@ impl SQLCommand {
                     values.join(", ")
                 )
             }
-            SQLCommand::SelectFrom { table } => format!("SELECT * FROM {}", table),
+            SQLCommand::SelectFrom { table, page } => format!("SELECT * FROM {} PAGE {}", table, page),
         }
     }
 }
@@ -44,7 +46,8 @@ impl FromIterator<String> for SQLCommand {
             "CREATE TABLE" => {
                 let name = iter.next().unwrap();
                 let columns = iter.collect();
-                SQLCommand::CreateTable { name, columns }
+                let page_size = 100;
+                SQLCommand::CreateTable { name, columns, page_size }
             }
             "INSERT INTO" => {
                 let table = iter.next().unwrap();
@@ -60,7 +63,8 @@ impl FromIterator<String> for SQLCommand {
             }
             "SELECT * FROM" => {
                 let table = iter.next().unwrap();
-                SQLCommand::SelectFrom { table }
+                let page = iter.next().unwrap().parse::<usize>().unwrap();
+                SQLCommand::SelectFrom { table, page }
             }
             _ => panic!("Invalid command"),
         }
