@@ -4,8 +4,7 @@ use std::collections::HashMap;
 pub enum SQLCommand {
     CreateTable {
         name: String,
-        columns: Vec<String>,
-        page_size: usize
+        columns: Vec<String>
     },
     InsertInto {
         table: String,
@@ -13,15 +12,20 @@ pub enum SQLCommand {
     },
     SelectFrom {
         table: String,
-        page: usize
+        page_size: usize,
+        page: usize,
     },
+    DeleteFrom {
+        table: String,
+        condition: Option<String>,
+    }
 }
 
 impl SQLCommand {
     pub fn to_string(&self) -> String {
         match self {
-            SQLCommand::CreateTable { name, columns, page_size } => {
-                format!("CREATE TABLE {} ({}) PAGE SIZE {}", name, columns.join(", "), page_size)
+            SQLCommand::CreateTable { name, columns } => {
+                format!("CREATE TABLE {} ({})", name, columns.join(", "))
             }
             SQLCommand::InsertInto { table, values } => {
                 let columns: Vec<String> = values.keys().map(|s| s.to_string()).collect();
@@ -33,7 +37,14 @@ impl SQLCommand {
                     values.join(", ")
                 )
             }
-            SQLCommand::SelectFrom { table, page } => format!("SELECT * FROM {} PAGE {}", table, page),
+            SQLCommand::SelectFrom { table, page_size, page, } => format!("SELECT * FROM {} LIMIT {} OFFSET {}", table, page_size, page),
+            SQLCommand::DeleteFrom { table, condition } => {
+                let condition_str = condition
+                    .as_ref()
+                    .map(|c| format!(" WHERE {}", c))
+                    .unwrap_or_else(|| String::new());
+                format!("DELETE FROM {}{}", table, condition_str)
+            }
         }
     }
 }
@@ -46,8 +57,7 @@ impl FromIterator<String> for SQLCommand {
             "CREATE TABLE" => {
                 let name = iter.next().unwrap();
                 let columns = iter.collect();
-                let page_size = 100;
-                SQLCommand::CreateTable { name, columns, page_size }
+                SQLCommand::CreateTable { name, columns }
             }
             "INSERT INTO" => {
                 let table = iter.next().unwrap();
@@ -63,8 +73,14 @@ impl FromIterator<String> for SQLCommand {
             }
             "SELECT * FROM" => {
                 let table = iter.next().unwrap();
-                let page = iter.next().unwrap().parse::<usize>().unwrap();
-                SQLCommand::SelectFrom { table, page }
+                let page_size = iter.next().unwrap_or_else(|| "1000".to_string()).parse::<usize>().unwrap();
+                let page = iter.next().unwrap_or_else(|| "1".to_string()).parse::<usize>().unwrap();
+                SQLCommand::SelectFrom { table, page_size, page }
+            }
+            "DELETE FROM" => {
+                let table = iter.next().unwrap();
+                let condition = iter.next().map(|s| s.to_string());
+                SQLCommand::DeleteFrom { table, condition }
             }
             _ => panic!("Invalid command"),
         }

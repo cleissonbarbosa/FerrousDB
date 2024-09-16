@@ -19,11 +19,9 @@ pub fn parse_sql(sql: &str) -> Result<SQLCommand, String> {
                 .iter()
                 .map(|c| c.name.value.clone())
                 .collect();
-            let page_size = 10; // default page size
             Ok(SQLCommand::CreateTable {
                 name: table_name,
-                columns: column_names,
-                page_size,
+                columns: column_names
             })
         }
         Statement::Insert(insert) => {
@@ -54,25 +52,36 @@ pub fn parse_sql(sql: &str) -> Result<SQLCommand, String> {
                 if let Some(table) = select.from.first() {
                     if let sqlparser::ast::TableFactor::Table { name, .. } = &table.relation {
                         let mut page = 1;
-                        let mut page_size = 10; // default page size
+                        let mut page_size = 1000; // default page size
 
                         // Check for LIMIT clause
                         if let Some(limit) = &query.limit {
                             if let Expr::Value(sqlparser::ast::Value::Number(n, _)) = limit {
-                                page_size = n.parse().unwrap_or(10);
+                                if let Ok(parsed_limit) = n.parse::<usize>() {
+                                    page_size = parsed_limit;
+                                } else {
+                                    return Err("Invalid number in LIMIT clause".to_string());
+                                }
                             }
                         }
 
                         // Check for OFFSET clause
                         if let Some(Offset { value, .. }) = &query.offset {
                             if let Expr::Value(sqlparser::ast::Value::Number(n, _)) = value {
-                                let offset: usize = n.parse().unwrap_or(0);
-                                page = (offset / page_size) + 1;
+                                if let Ok(parsed_offset) = n.parse::<usize>() {
+                                    page = (parsed_offset / page_size) + 1;
+                                    if parsed_offset % page_size != 0 {
+                                        page += 1;
+                                    }
+                                } else {
+                                    return Err("Invalid number in OFFSET clause".to_string());
+                                }
                             }
                         }
 
                         Ok(SQLCommand::SelectFrom {
                             table: name.to_string(),
+                            page_size,
                             page,
                         })
                     } else {
@@ -84,6 +93,10 @@ pub fn parse_sql(sql: &str) -> Result<SQLCommand, String> {
             } else {
                 Err("Unsupported query type".to_string())
             }
+        }
+        Statement::Delete(_) => {
+            // TODO
+            panic!("Not implemented!");
         }
         _ => Err("Unsupported SQL command".to_string()),
     }
