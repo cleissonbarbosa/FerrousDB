@@ -4,7 +4,7 @@ use druid::{
     WindowDesc,
 };
 use druid::{LensExt, WindowConfig};
-use ferrous_db::{FerrousDB, Row};
+use ferrous_db::{ColumnSchema, FerrousDB, Row};
 
 #[derive(Clone, Lens, PartialEq)]
 struct FerrousDBState {
@@ -56,14 +56,16 @@ fn ui_builder() -> impl Widget<FerrousDBState> {
         Button::new("Criar Tabela").on_click(|ctx, data: &mut FerrousDBState, e| {
             // Abrir a janela de diálogo para criar tabela
             let dialog = create_table_dialog();
-            let window_config = WindowConfig::default().window_size((400.0, 200.1)).transparent(true);
+            let window_config = WindowConfig::default()
+                .window_size((400.0, 200.1))
+                .transparent(true);
             ctx.new_sub_window(window_config, dialog, data.clone(), e.clone());
         });
     //let insert_button =
-     //   Button::new("Inserir Tabela").on_click(|ctx, data: &mut FerrousDBState, _| {
-            // Lógica para inserir uma nova tabela
+    //   Button::new("Inserir Tabela").on_click(|ctx, data: &mut FerrousDBState, _| {
+    // Lógica para inserir uma nova tabela
     //        let new_table_name = format!("Tabela_{}", data.db.tables.len() + 1);
-     //       data.db.create_table(&new_table_name, vec![]);
+    //       data.db.create_table(&new_table_name, vec![]);
     //        ctx.request_update(); // Atualiza a interface
     //    });
 
@@ -154,13 +156,14 @@ fn create_table_dialog() -> impl Widget<FerrousDBState> {
         .expand_width();
 
     let create_button = Button::new("Criar").on_click(|ctx, data: &mut FerrousDBState, _| {
-        let columns: Vec<&str> = data
+        let columns: Vec<ColumnSchema> = data
             .new_columns
             .split(',')
             .map(|s| s.trim())
             .filter(|s| !s.is_empty())
+            .map(|v| v.parse::<ColumnSchema>().unwrap())
             .collect();
-        data.db.create_table(&data.new_table_name, columns);
+        data.db.create_table(&data.new_table_name, columns).unwrap();
         data.new_table_name.clear();
         data.new_columns.clear();
         ctx.window().close();

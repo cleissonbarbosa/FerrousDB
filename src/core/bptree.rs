@@ -15,10 +15,7 @@ struct Node {
 
 impl BPTree {
     pub fn new(order: usize) -> Self {
-        BPTree {
-            root: None,
-            order,
-        }
+        BPTree { root: None, order }
     }
 
     pub fn insert(&mut self, key: i32) {
@@ -32,7 +29,10 @@ impl BPTree {
         // Implement search logic here
         let mut current = self.root.clone();
         while let Some(node) = current {
-            let index = node.keys.iter().find(|&&k| k >= key).map_or_else(|| node.keys.len(), |k| node.keys.iter().take_while(|&&r| r < *k).count());
+            let index = node.keys.iter().find(|&&k| k >= key).map_or_else(
+                || node.keys.len(),
+                |k| node.keys.iter().take_while(|&&r| r < *k).count(),
+            );
             if index < node.keys.len() && node.keys[index] == key {
                 return Some(key);
             }
@@ -75,7 +75,10 @@ impl BPTree {
         let mut key_inserted = false;
 
         if let Some(ref mut node) = node {
-            let index = node.keys.iter().find(|&&k| k >= key).map_or_else(|| node.keys.len(), |k| node.keys.iter().take_while(|&&r| r < *k).count());
+            let index = node.keys.iter().find(|&&k| k >= key).map_or_else(
+                || node.keys.len(),
+                |k| node.keys.iter().take_while(|&&r| r < *k).count(),
+            );
             if index < node.keys.len() && node.keys[index] == key {
                 key_inserted = true;
             } else if node.is_leaf {
@@ -107,7 +110,13 @@ impl BPTree {
             children: node.children.split_off(index),
             is_leaf: node.is_leaf,
         });
-        node.keys.insert(index, *new_node.keys.first().expect("New node must have at least one key"));
+        node.keys.insert(
+            index,
+            *new_node
+                .keys
+                .first()
+                .expect("New node must have at least one key"),
+        );
         node.children.insert(index, Some(new_node));
     }
 
@@ -116,7 +125,10 @@ impl BPTree {
         let mut key_deleted = false;
 
         if let Some(ref mut node) = node {
-            let index = node.keys.iter().find(|&&k| k >= key).map_or_else(|| node.keys.len(), |k| node.keys.iter().take_while(|&&r| r < *k).count());
+            let index = node.keys.iter().find(|&&k| k >= key).map_or_else(
+                || node.keys.len(),
+                |k| node.keys.iter().take_while(|&&r| r < *k).count(),
+            );
             if index < node.keys.len() && node.keys[index] == key {
                 if node.is_leaf {
                     node.keys.remove(index);

@@ -1,7 +1,39 @@
-use druid::Data;
 use serde::{Deserialize, Serialize};
 
 use super::row::Row;
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct ColumnSchema {
+    pub name: String,
+    pub data_type: String,
+    // Additional metadata (e.g., nullable, default value)
+}
+
+impl ColumnSchema {
+    pub fn new(name: String, data_type: String) -> Self {
+        ColumnSchema { name, data_type }
+    }
+}
+
+impl std::fmt::Display for ColumnSchema {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} ({})", self.name, self.data_type)
+    }
+}
+
+impl std::str::FromStr for ColumnSchema {
+    type Err = std::fmt::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let parts: Vec<_> = s.split_whitespace().collect();
+        if parts.len() != 2 {
+            return Err(std::fmt::Error);
+        }
+        let name = parts[0].to_string();
+        let data_type = parts[1].to_string();
+        Ok(ColumnSchema { name, data_type })
+    }
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 /// Represents a table in the database.
@@ -9,16 +41,16 @@ pub struct Table {
     /// The name of the table.
     pub name: String,
     /// The columns of the table.
-    pub columns: Vec<String>,
+    pub schema: Vec<ColumnSchema>,
     /// The rows of the table.
     pub rows: Vec<Row>,
 }
 
 impl Table {
-    pub fn new(name: String, columns: Vec<String>) -> Self {
+    pub fn new(name: String, schema: Vec<ColumnSchema>) -> Self {
         Table {
             name,
-            columns,
+            schema: schema,
             rows: Vec::new(),
         }
     }

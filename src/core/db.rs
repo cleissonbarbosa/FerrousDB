@@ -7,10 +7,14 @@ use std::{
 use druid::Data;
 use serde::{Deserialize, Serialize};
 
-use super::{row::Row, table::Table};
+use super::{
+    error_handling::FerrousDBError,
+    row::Row,
+    table::{ColumnSchema, Table},
+};
 use crate::core::parser::command::SQLCommand;
 use crate::core::parser::sql_parser::parse_sql;
-use crate::core::bptree::BPTree;
+use crate::{core::bptree::BPTree, DataType};
 
 pub enum PageResult<'a> {
     TableNotFound,
@@ -41,23 +45,50 @@ impl FerrousDB {
         }
     }
 
-    pub fn create_table(&mut self, name: &str, columns: Vec<&str>) {
+    pub fn create_table(
+        &mut self,
+        name: &str,
+        columns: Vec<ColumnSchema>,
+    ) -> Result<(), FerrousDBError> {
+        if self.tables.contains_key(name) {
+            return Err(FerrousDBError::TableExists(name.to_string()));
+        }
+
         let table = Table {
             name: name.to_string(),
-            columns: columns.into_iter().map(|s| s.to_string()).collect(),
+            schema: columns,
             rows: Vec::new(),
         };
         self.tables.insert(name.to_string(), table);
         self.save_to_file("data.ferrous")
             .expect("Failed to save to file");
+        Ok(())
     }
 
-    pub fn insert_into(&mut self, table_name: &str, values: HashMap<String, String>) {
+    pub fn insert_into(
+        &mut self,
+        table_name: &str,
+        values: HashMap<String, DataType>,
+    ) -> Result<(), FerrousDBError> {
         if let Some(table) = self.tables.get_mut(table_name) {
+            // Check data types match the schema
+            for (column_name, value) in &values {
+                let column_schema = table
+                    .schema
+                    .iter()
+                    .find(|col| &col.name == column_name)
+                    .ok_or(FerrousDBError::ColumnNotFound(column_name.clone()))?;
+                if value.get_type() != column_schema.data_type {
+                    return Err(FerrousDBError::TypeMismatch(column_name.clone()));
+                }
+            }
             let row = Row { data: values };
             table.rows.push(row);
             self.save_to_file("data.ferrous")
                 .expect("Failed to save to file");
+            Ok(())
+        } else {
+            return Err(FerrousDBError::TableNotFound(table_name.to_string()));
         }
     }
 
@@ -120,12 +151,12 @@ impl FerrousDB {
         let command = parse_sql(sql)?;
         match command {
             SQLCommand::CreateTable { name, columns } => {
-                let columns_ref: Vec<&str> = columns.iter().map(AsRef::as_ref).collect();
-                self.create_table(&name, columns_ref);
+                let columns_ref: Vec<ColumnSchema> = columns;
+                self.create_table(&name, columns_ref).unwrap();
                 Ok(format!("Table '{}' created successfully", name))
             }
             SQLCommand::InsertInto { table, values } => {
-                self.insert_into(&table, values);
+                self.insert_into(&table, values).unwrap();
                 Ok(format!("Data inserted into table '{}' successfully", table))
             }
             SQLCommand::SelectFrom {
@@ -188,36 +219,63 @@ mod tests {
     #[test]
     fn test_create_table() {
         let mut db = FerrousDB::new();
-        db.create_table("users", vec!["name", "age"]);
+        db.create_table(
+            "users",
+            vec![
+                ColumnSchema::new("name".to_string(), "TEXT".to_string()),
+                ColumnSchema::new("age".to_string(), "INTEGER".to_string()),
+            ],
+        )
+        .unwrap();
         assert_eq!(db.tables.len(), 1);
-        assert_eq!(db.tables.get("users").unwrap().columns, vec!["name", "age"]);
+        assert_eq!(
+            db.tables.get("users").unwrap().schema,
+            vec![
+                ColumnSchema::new("name".to_string(), "TEXT".to_string()),
+                ColumnSchema::new("age".to_string(), "INTEGER".to_string()),
+            ]
+        );
     }
 
     #[test]
     fn test_insert_into() {
         let mut db = FerrousDB::new();
-        db.create_table("users", vec!["name", "age"]);
+        db.create_table(
+            "users",
+            vec![
+                ColumnSchema::new("name".to_string(), "TEXT".to_string()),
+                ColumnSchema::new("age".to_string(), "INTEGER".to_string()),
+            ],
+        )
+        .unwrap();
         let mut values = HashMap::new();
-        values.insert("name".to_string(), "Alice".to_string());
-        values.insert("age".to_string(), "30".to_string());
-        db.insert_into("users", values);
+        values.insert("name".to_string(), DataType::Text("Alice".to_string()));
+        values.insert("age".to_string(), DataType::Integer(30));
+        db.insert_into("users", values).unwrap();
         assert_eq!(db.tables.get("users").unwrap().rows.len(), 1);
         let row = &db.tables.get("users").unwrap().rows[0];
-        assert_eq!(row.data.get("name").unwrap(), "Alice");
-        assert_eq!(row.data.get("age").unwrap(), "30");
+        assert_eq!(row.data.get("name").unwrap().get_value(), "Alice");
+        assert_eq!(row.data.get("age").unwrap().get_value(), "30");
     }
 
     #[test]
     fn test_select_from_with_limit_and_offset() {
         let mut db = FerrousDB::new();
-        db.create_table("users", vec!["name", "age"]);
+        db.create_table(
+            "users",
+            vec![
+                ColumnSchema::new("name".to_string(), "TEXT".to_string()),
+                ColumnSchema::new("age".to_string(), "INTEGER".to_string()),
+            ],
+        )
+        .unwrap();
 
         // Insert 5 users
         for i in 1..=5 {
             let mut values = HashMap::new();
-            values.insert("name".to_string(), format!("User{}", i));
-            values.insert("age".to_string(), format!("{}", 20 + i));
-            db.insert_into("users", values);
+            values.insert("name".to_string(), DataType::Text(format!("User{}", i)));
+            values.insert("age".to_string(), DataType::Integer(20 + i));
+            db.insert_into("users", values).unwrap();
         }
 
         // Test with limit 2 and offset 1
@@ -225,8 +283,8 @@ mod tests {
         match table {
             PageResult::Page(rows) => {
                 assert_eq!(rows.len(), 2);
-                assert_eq!(rows[0].data.get("name").unwrap(), "User3");
-                assert_eq!(rows[1].data.get("name").unwrap(), "User4");
+                assert_eq!(rows[0].data.get("name").unwrap().get_value(), "User3");
+                assert_eq!(rows[1].data.get("name").unwrap().get_value(), "User4");
             }
             _ => {}
         };
@@ -236,7 +294,7 @@ mod tests {
         match table {
             PageResult::Page(rows) => {
                 assert_eq!(rows.len(), 1); // Only 2 rows left
-                assert_eq!(rows[0].data.get("name").unwrap(), "User5");
+                assert_eq!(rows[0].data.get("name").unwrap().get_value(), "User5");
             }
             _ => {}
         };

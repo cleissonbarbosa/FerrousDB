@@ -333,6 +333,7 @@ dependencies = [
  "im",
  "serde",
  "sqlparser",
+ "thiserror",
  "time",
 ]
 

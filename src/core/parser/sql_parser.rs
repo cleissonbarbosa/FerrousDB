@@ -1,4 +1,8 @@
+use std::collections::HashMap;
+
 use crate::core::parser::command::SQLCommand;
+use crate::core::table::ColumnSchema;
+use crate::DataType;
 use sqlparser::ast::{Expr, Offset, Statement};
 use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::Parser;
@@ -14,14 +18,14 @@ pub fn parse_sql(sql: &str) -> Result<SQLCommand, String> {
     match &ast[0] {
         Statement::CreateTable(create_table) => {
             let table_name = create_table.name.to_string();
-            let column_names: Vec<String> = create_table
+            let column_names: Vec<ColumnSchema> = create_table
                 .columns
                 .iter()
-                .map(|c| c.name.value.clone())
+                .map(|c| ColumnSchema::new(c.name.value.clone(), c.data_type.to_string()))
                 .collect();
             Ok(SQLCommand::CreateTable {
                 name: table_name,
-                columns: column_names
+                columns: column_names,
             })
         }
         Statement::Insert(insert) => {
@@ -29,9 +33,13 @@ pub fn parse_sql(sql: &str) -> Result<SQLCommand, String> {
             if let Some(query) = &insert.source {
                 if let sqlparser::ast::SetExpr::Values(values) = &*query.body {
                     if let Some(row) = values.rows.first() {
-                        let mut values = std::collections::HashMap::new();
+                        let mut values: HashMap<String, DataType> =
+                            std::collections::HashMap::new();
                         for (col, val) in insert.columns.iter().zip(row.iter()) {
-                            values.insert(col.value.clone(), val.to_string());
+                            values.insert(
+                                col.value.clone(),
+                                val.to_string().parse::<DataType>().unwrap(),
+                            );
                         }
                         Ok(SQLCommand::InsertInto {
                             table: insert.table_name.to_string(),

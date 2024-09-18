@@ -1,14 +1,16 @@
 use std::collections::HashMap;
 
+use crate::{core::table::ColumnSchema, DataType};
+
 #[derive(Debug, PartialEq)]
 pub enum SQLCommand {
     CreateTable {
         name: String,
-        columns: Vec<String>
+        columns: Vec<ColumnSchema>,
     },
     InsertInto {
         table: String,
-        values: HashMap<String, String>,
+        values: HashMap<String, DataType>,
     },
     SelectFrom {
         table: String,
@@ -18,14 +20,22 @@ pub enum SQLCommand {
     DeleteFrom {
         table: String,
         condition: Option<String>,
-    }
+    },
 }
 
 impl SQLCommand {
     pub fn to_string(&self) -> String {
         match self {
             SQLCommand::CreateTable { name, columns } => {
-                format!("CREATE TABLE {} ({})", name, columns.join(", "))
+                format!(
+                    "CREATE TABLE {} ({})",
+                    name,
+                    columns
+                        .iter()
+                        .map(|v| v.to_string())
+                        .collect::<Vec<String>>()
+                        .join(", ")
+                )
             }
             SQLCommand::InsertInto { table, values } => {
                 let columns: Vec<String> = values.keys().map(|s| s.to_string()).collect();
@@ -37,7 +47,14 @@ impl SQLCommand {
                     values.join(", ")
                 )
             }
-            SQLCommand::SelectFrom { table, page_size, page, } => format!("SELECT * FROM {} LIMIT {} OFFSET {}", table, page_size, page),
+            SQLCommand::SelectFrom {
+                table,
+                page_size,
+                page,
+            } => format!(
+                "SELECT * FROM {} LIMIT {} OFFSET {}",
+                table, page_size, page
+            ),
             SQLCommand::DeleteFrom { table, condition } => {
                 let condition_str = condition
                     .as_ref()
@@ -56,26 +73,40 @@ impl FromIterator<String> for SQLCommand {
         match command.as_str() {
             "CREATE TABLE" => {
                 let name = iter.next().unwrap();
-                let columns = iter.collect();
+                let columns = iter
+                    .map(|s| s.parse::<ColumnSchema>().unwrap()) // Convert String to ColumnSchema
+                    .collect::<Vec<ColumnSchema>>();
                 SQLCommand::CreateTable { name, columns }
             }
             "INSERT INTO" => {
                 let table = iter.next().unwrap();
-                let values: HashMap<String, String> = iter
+                let values: HashMap<String, DataType> = iter
                     .map(|s| {
                         let mut parts = s.splitn(2, '=');
                         let key = parts.next().unwrap().to_string();
                         let value = parts.next().unwrap().to_string();
-                        (key, value)
+                        (key, value.parse::<DataType>().unwrap())
                     })
                     .collect();
                 SQLCommand::InsertInto { table, values }
             }
             "SELECT * FROM" => {
                 let table = iter.next().unwrap();
-                let page_size = iter.next().unwrap_or_else(|| "1000".to_string()).parse::<usize>().unwrap();
-                let page = iter.next().unwrap_or_else(|| "1".to_string()).parse::<usize>().unwrap();
-                SQLCommand::SelectFrom { table, page_size, page }
+                let page_size = iter
+                    .next()
+                    .unwrap_or_else(|| "1000".to_string())
+                    .parse::<usize>()
+                    .unwrap();
+                let page = iter
+                    .next()
+                    .unwrap_or_else(|| "1".to_string())
+                    .parse::<usize>()
+                    .unwrap();
+                SQLCommand::SelectFrom {
+                    table,
+                    page_size,
+                    page,
+                }
             }
             "DELETE FROM" => {
                 let table = iter.next().unwrap();

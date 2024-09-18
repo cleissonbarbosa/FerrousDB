@@ -1,5 +1,6 @@
-mod table;
-pub mod row;
-pub mod db;
-pub mod parser;
 mod bptree;
+pub mod db;
+mod error_handling;
+pub mod parser;
+pub mod row;
+pub mod table;
