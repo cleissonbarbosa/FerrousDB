@@ -56,7 +56,7 @@ fn ui_builder() -> impl Widget<FerrousDBState> {
         Button::new("Criar Tabela").on_click(|ctx, data: &mut FerrousDBState, e| {
             // Abrir a janela de diálogo para criar tabela
             let dialog = create_table_dialog();
-            let window_config = WindowConfig::default();
+            let window_config = WindowConfig::default().window_size((400.0, 200.1)).transparent(true);
             ctx.new_sub_window(window_config, dialog, data.clone(), e.clone());
         });
     //let insert_button =
@@ -145,11 +145,13 @@ fn ui_builder() -> impl Widget<FerrousDBState> {
 fn create_table_dialog() -> impl Widget<FerrousDBState> {
     let table_name = TextBox::new()
         .with_placeholder("Nome da Tabela")
-        .lens(FerrousDBState::new_table_name);
+        .lens(FerrousDBState::new_table_name)
+        .expand_width();
 
     let columns = TextBox::new()
         .with_placeholder("Colunas (separadas por vírgula)")
-        .lens(FerrousDBState::new_columns);
+        .lens(FerrousDBState::new_columns)
+        .expand_width();
 
     let create_button = Button::new("Criar").on_click(|ctx, data: &mut FerrousDBState, _| {
         let columns: Vec<&str> = data

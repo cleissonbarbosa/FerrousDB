@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use super::{row::Row, table::Table};
 use crate::core::parser::command::SQLCommand;
 use crate::core::parser::sql_parser::parse_sql;
+use crate::core::bptree::BPTree;
 
 pub enum PageResult<'a> {
     TableNotFound,
@@ -21,6 +22,7 @@ pub enum PageResult<'a> {
 /// Represents the FerrousDB database.
 pub struct FerrousDB {
     pub tables: HashMap<String, Table>,
+    pub index: BPTree,
     is_loaded: bool,
 }
 
@@ -34,6 +36,7 @@ impl FerrousDB {
     pub fn new() -> Self {
         FerrousDB {
             tables: HashMap::new(),
+            index: BPTree::new(4),
             is_loaded: false,
         }
     }
