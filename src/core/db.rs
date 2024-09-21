@@ -37,6 +37,12 @@ impl Data for FerrousDB {
     }
 }
 
+impl Default for FerrousDB {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FerrousDB {
     pub fn new() -> Self {
         match FerrousDB::load_from_file("data.ferrous") {
@@ -78,7 +84,7 @@ impl FerrousDB {
             let column_schema = table
                 .schema
                 .iter()
-                .find(|col| &col.name == column_name)
+                .find(|col| &col.name == &column_name)
                 .ok_or(FerrousDBError::ColumnNotFound(column_name.to_string()))?;
 
             let index = BPTree::new(column_schema.data_type.clone().parse().unwrap());
@@ -112,7 +118,7 @@ impl FerrousDB {
                 .expect("Failed to save to file");
             Ok(())
         } else {
-            return Err(FerrousDBError::TableNotFound(table_name.to_string()));
+            Err(FerrousDBError::TableNotFound(table_name.to_string()))
         }
     }
 

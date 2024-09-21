@@ -18,9 +18,8 @@ A Database write in rust, inspired by sqlite.
 - [ ] Aggregations
 - [ ] Group by
 - [ ] Order by
-- [ ] Limit
-- [ ] Offset
+- [x] Limit
+- [x] Offset
 - [ ] Constraints
 - [ ] Views
 - [ ] Triggers
-

@@ -1,10 +1,9 @@
 use std::collections::HashMap;
-use std::fmt::format;
 
 use crate::core::error_handling::FerrousDBError;
 use crate::core::parser::command::SQLCommand;
 use crate::core::table::ColumnSchema;
-use crate::{DataType, Row};
+use crate::DataType;
 use sqlparser::ast::{Expr, Offset, Statement};
 use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::Parser;

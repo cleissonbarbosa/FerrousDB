@@ -50,7 +50,7 @@ impl Table {
     pub fn new(name: String, schema: Vec<ColumnSchema>) -> Self {
         Table {
             name,
-            schema: schema,
+            schema,
             rows: Vec::new(),
         }
     }
