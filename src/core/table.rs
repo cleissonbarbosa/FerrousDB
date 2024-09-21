@@ -60,9 +60,9 @@ impl Table {
             return None;
         }
 
-        if page_number < 0 {
-            return Some(self.rows.iter().collect());
-        }
+        // if page_number < 0 {
+        //     return Some(self.rows.iter().collect());
+        // }
 
         if page_number == 0 {
             println!("WARN: Page start with 1 not 0");

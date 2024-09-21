@@ -1,10 +1,12 @@
-use druid::widget::{Button, Flex, Label, List, Padding, Scroll, TextBox};
+use std::sync::Arc;
+
+use druid::widget::{Button, Controller, Flex, Label, List, Padding, Scroll, SizedBox, TextBox};
 use druid::{
-    AppLauncher, Data, Env, EventCtx, Key, Lens, LocalizedString, PlatformError, Widget, WidgetExt,
-    WindowDesc,
+    AppLauncher, Data, Env, Event, EventCtx, Lens, LocalizedString, PlatformError, Widget,
+    WidgetExt, WindowDesc,
 };
-use druid::{LensExt, WindowConfig};
-use ferrous_db::{ColumnSchema, FerrousDB, Row};
+use druid::{Selector, WindowConfig};
+use ferrous_db::{ColumnSchema, Row};
 
 #[derive(Clone, Lens, PartialEq)]
 struct FerrousDBState {
@@ -13,7 +15,7 @@ struct FerrousDBState {
     rows: Vec<Row>,
     new_table_name: String,
     new_columns: String,
-    table_names: im::Vector<String>,
+    table_names: Arc<Vec<String>>,
     selected_table: Option<String>,
     sql_command: String,
     sql_output: String,
@@ -25,21 +27,25 @@ impl Data for FerrousDBState {
     }
 }
 
+const SELECT_TABLE: Selector<String> = Selector::new("app.select-table");
+
 fn main() -> Result<(), PlatformError> {
-    let main_window = WindowDesc::new(ui_builder()).title(
-        LocalizedString::new("ferrousdb-win-title")
-            .with_placeholder("FerrousDB - A Database write in rust"),
-    );
-    let data = FerrousDBState {
+    let mut data = FerrousDBState {
         db: ferrous_db::FerrousDB::new(),
         rows: Vec::new(),
         new_table_name: "".to_string(),
         new_columns: "".to_string(),
-        table_names: im::Vector::new(),
+        table_names: Arc::new(Vec::new()),
         selected_table: None,
         sql_command: "".to_string(),
         sql_output: "".to_string(),
     };
+
+    data.table_names = Arc::new(data.db.tables.clone().into_keys().collect());
+    let main_window = WindowDesc::new(ui_builder()).title(
+        LocalizedString::new("ferrousdb-win-title")
+            .with_placeholder("FerrousDB - A Database write in rust"),
+    );
     AppLauncher::with_window(main_window)
         .configure_env(|env, _| {
             env.set(
@@ -49,6 +55,28 @@ fn main() -> Result<(), PlatformError> {
         })
         .log_to_console()
         .launch(data)
+}
+
+struct AppController;
+
+impl<W: Widget<FerrousDBState>> Controller<FerrousDBState, W> for AppController {
+    fn event(
+        &mut self,
+        child: &mut W,
+        ctx: &mut EventCtx,
+        event: &Event,
+        data: &mut FerrousDBState,
+        env: &Env,
+    ) {
+        if let Event::Command(cmd) = event {
+            if let Some(table_name) = cmd.get(SELECT_TABLE) {
+                println!("selected table: {table_name}");
+                data.selected_table = Some(table_name.clone());
+                ctx.request_update();
+            }
+        }
+        child.event(ctx, event, data, env);
+    }
 }
 
 fn ui_builder() -> impl Widget<FerrousDBState> {
@@ -61,25 +89,16 @@ fn ui_builder() -> impl Widget<FerrousDBState> {
                 .transparent(true);
             ctx.new_sub_window(window_config, dialog, data.clone(), e.clone());
         });
-    //let insert_button =
-    //   Button::new("Inserir Tabela").on_click(|ctx, data: &mut FerrousDBState, _| {
-    // Lógica para inserir uma nova tabela
-    //        let new_table_name = format!("Tabela_{}", data.db.tables.len() + 1);
-    //       data.db.create_table(&new_table_name, vec![]);
-    //        ctx.request_update(); // Atualiza a interface
-    //    });
 
-    //let table_list = List::new(|| {
-    //   Label::new(|table_name: &String, _env: &Env| table_name.clone())
-    //        .on_click(|ctx, data: &mut FerrousDBState, e: &Env| {
-    //            data.selected_table = e.get("key");
-    // Atualize a visualização dos dados da tabela selecionada
-    //             ctx.request_update();
-    //        })
-    //          .padding(5.0)
-    //        .expand_width()
-    //})
-    //.lens(FerrousDBState::table_names);
+    let table_list = List::new(|| {
+        Label::new(move |table_name: &String, _e: &Env| table_name.clone())
+            .on_click(|ctx, table_name: &mut String, _e: &Env| {
+                ctx.submit_command(SELECT_TABLE.with(table_name.clone()));
+            })
+            .padding(5.0)
+            .expand_width()
+    })
+    .lens(FerrousDBState::table_names);
 
     // Área para exibir os dados da tabela selecionada
     let table_data = Label::new(|data: &FerrousDBState, _env: &Env| {
@@ -112,24 +131,31 @@ fn ui_builder() -> impl Widget<FerrousDBState> {
                 Err(e) => data.sql_output = format!("Erro: {}", e),
             }
             ctx.request_update();
+            if data.sql_command.to_uppercase().contains("CREATE TABLE") {
+                data.table_names = Arc::new(data.db.tables.clone().into_keys().collect())
+            }
         });
 
     let sql_output =
         Label::new(|data: &FerrousDBState, _env: &Env| data.sql_output.clone()).padding(5.0);
 
     let sql_section = Flex::column()
+        .with_child(sql_snippets().padding(5.0))
         .with_child(sql_input.padding(5.0))
         .with_child(execute_button.padding(5.0))
         .with_child(sql_output.padding(5.0));
 
-    Flex::column()
+    let root = Flex::column()
         .with_child(create_table_button.padding(5.0))
-        //.with_child(
-        //    Scroll::new(table_list)
-        //        .vertical()
-        //         .padding(5.0)
-        //       .expand_height(),
-        // )
+        .with_flex_child(
+            SizedBox::new(
+                Scroll::new(table_list)
+                    .vertical()
+                    .padding(5.0)
+                    .expand_height(),
+            ),
+            2.0,
+        )
         .with_flex_child(
             Scroll::new(table_data)
                 .vertical()
@@ -142,6 +168,9 @@ fn ui_builder() -> impl Widget<FerrousDBState> {
             1.0,
         )
         .with_child(sql_section)
+        .controller(AppController);
+
+    root
 }
 
 fn create_table_dialog() -> impl Widget<FerrousDBState> {
@@ -164,6 +193,11 @@ fn create_table_dialog() -> impl Widget<FerrousDBState> {
             .map(|v| v.parse::<ColumnSchema>().unwrap())
             .collect();
         data.db.create_table(&data.new_table_name, columns).unwrap();
+
+        let mut names = (*data.table_names).clone();
+        names.push(data.new_table_name.clone());
+        data.table_names = Arc::new(names);
+
         data.new_table_name.clear();
         data.new_columns.clear();
         ctx.window().close();
@@ -175,4 +209,41 @@ fn create_table_dialog() -> impl Widget<FerrousDBState> {
         .with_child(create_button.padding(5.0));
 
     Padding::new(10.0, layout)
+}
+
+fn sql_snippets() -> impl Widget<FerrousDBState> {
+    let create_button =
+        Button::new("CREATE TABLE").on_click(|ctx, data: &mut FerrousDBState, e| {
+            let dialog = create_table_dialog();
+            let window_config = WindowConfig::default()
+                .window_size((400.0, 200.1))
+                .transparent(true);
+            ctx.new_sub_window(window_config, dialog, data.clone(), e.clone());
+        });
+
+    let select_all_button =
+        Button::new("SELECT *").on_click(|_ctx, data: &mut FerrousDBState, _env| {
+            data.sql_command = "SELECT * FROM ;".to_string();
+        });
+
+    let insert_button =
+        Button::new("INSERT INTO").on_click(|_ctx, data: &mut FerrousDBState, _env| {
+            data.sql_command = "INSERT INTO  (columns) VALUES (values);".to_string();
+        });
+
+    let update_button = Button::new("UPDATE").on_click(|_ctx, data: &mut FerrousDBState, _env| {
+        data.sql_command = "UPDATE  SET  WHERE ;".to_string();
+    });
+
+    let delete_button = Button::new("DELETE").on_click(|_ctx, data: &mut FerrousDBState, _env| {
+        data.sql_command = "DELETE FROM  WHERE ;".to_string();
+    });
+
+    // Layout para os botões de snippets
+    Flex::row()
+        .with_child(create_button.padding(5.0))
+        .with_child(select_all_button.padding(5.0))
+        .with_child(insert_button.padding(5.0))
+        .with_child(update_button.padding(5.0))
+        .with_child(delete_button.padding(5.0))
 }

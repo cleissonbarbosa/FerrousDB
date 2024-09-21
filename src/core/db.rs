@@ -11,6 +11,7 @@ use super::{
     error_handling::FerrousDBError,
     row::Row,
     table::{ColumnSchema, Table},
+    write_ahead_log::WriteAheadLog,
 };
 use crate::core::parser::command::SQLCommand;
 use crate::core::parser::sql_parser::parse_sql;
@@ -26,7 +27,7 @@ pub enum PageResult<'a> {
 /// Represents the FerrousDB database.
 pub struct FerrousDB {
     pub tables: HashMap<String, Table>,
-    pub index: BPTree,
+    pub indexs: HashMap<String, BPTree>,
     is_loaded: bool,
 }
 
@@ -38,10 +39,13 @@ impl Data for FerrousDB {
 
 impl FerrousDB {
     pub fn new() -> Self {
-        FerrousDB {
-            tables: HashMap::new(),
-            index: BPTree::new(4),
-            is_loaded: false,
+        match FerrousDB::load_from_file("data.ferrous") {
+            Ok(db) => db,
+            Err(_) => FerrousDB {
+                tables: HashMap::new(),
+                indexs: HashMap::new(),
+                is_loaded: false,
+            },
         }
     }
 
@@ -63,6 +67,26 @@ impl FerrousDB {
         self.save_to_file("data.ferrous")
             .expect("Failed to save to file");
         Ok(())
+    }
+
+    pub fn create_index(
+        &mut self,
+        table_name: &str,
+        column_name: &str,
+    ) -> Result<(), FerrousDBError> {
+        if let Some(table) = self.tables.get_mut(table_name) {
+            let column_schema = table
+                .schema
+                .iter()
+                .find(|col| &col.name == column_name)
+                .ok_or(FerrousDBError::ColumnNotFound(column_name.to_string()))?;
+
+            let index = BPTree::new(column_schema.data_type.clone().parse().unwrap());
+            self.indexs.insert(column_name.to_string(), index);
+            Ok(())
+        } else {
+            Err(FerrousDBError::TableNotFound(table_name.to_string()))
+        }
     }
 
     pub fn insert_into(
@@ -147,7 +171,9 @@ impl FerrousDB {
             .map(|table| table.1.total_pages(page_size))
     }
 
-    pub fn execute_sql(&mut self, sql: &str) -> Result<String, String> {
+    pub fn execute_sql(&mut self, sql: &str) -> Result<String, FerrousDBError> {
+        let mut wal = WriteAheadLog::new("ferrousdb.log").unwrap();
+        wal.log(sql).unwrap();
         let command = parse_sql(sql)?;
         match command {
             SQLCommand::CreateTable { name, columns } => {
@@ -164,11 +190,14 @@ impl FerrousDB {
                 page_size,
                 page,
             } => match self.get_page(&table, page, page_size) {
-                PageResult::TableNotFound => Err(format!("Table '{}' not found", table)),
-                PageResult::PageOutOfRange => Err(format!(
+                PageResult::TableNotFound => Err(FerrousDBError::TableNotFound(format!(
+                    "Table '{}' not found",
+                    table
+                ))),
+                PageResult::PageOutOfRange => Err(FerrousDBError::ParseError(format!(
                     "Page number {} out of range for table '{}'",
                     page, table
-                )),
+                ))),
                 PageResult::Page(rows) => {
                     for row in rows {
                         println!("{:?}", row);
@@ -190,7 +219,7 @@ impl FerrousDB {
 
                 match self.delete_from(&table, condition_fn) {
                     Ok(count) => Ok(format!("{} row(s) deleted from table '{}'", count, table)),
-                    Err(e) => Err(e),
+                    Err(e) => Err(FerrousDBError::ParseError(e)),
                 }
             }
         }

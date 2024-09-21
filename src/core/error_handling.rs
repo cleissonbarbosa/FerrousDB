@@ -19,4 +19,10 @@ pub enum FerrousDBError {
 
     #[error("Table '{0}' already exists")]
     TableExists(String),
+
+    #[error("Index on '{0}' not found")]
+    IndexNotFound(String),
+
+    #[error("Recover Error: '{0}'")]
+    RecoveryError(String),
 }

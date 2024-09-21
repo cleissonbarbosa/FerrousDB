@@ -1,18 +1,23 @@
 use std::collections::HashMap;
+use std::fmt::format;
 
+use crate::core::error_handling::FerrousDBError;
 use crate::core::parser::command::SQLCommand;
 use crate::core::table::ColumnSchema;
-use crate::DataType;
+use crate::{DataType, Row};
 use sqlparser::ast::{Expr, Offset, Statement};
 use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::Parser;
 
-pub fn parse_sql(sql: &str) -> Result<SQLCommand, String> {
+pub fn parse_sql(sql: &str) -> Result<SQLCommand, FerrousDBError> {
     let dialect = GenericDialect {}; // or a more specific dialect if needed
-    let ast = Parser::parse_sql(&dialect, sql).map_err(|e| e.to_string())?;
+    let ast =
+        Parser::parse_sql(&dialect, sql).map_err(|e| FerrousDBError::ParseError(e.to_string()))?;
 
     if ast.len() != 1 {
-        return Err("Only single SQL statements are supported".to_string());
+        return Err(FerrousDBError::ParseError(
+            "Only single SQL statements are supported".to_string(),
+        ));
     }
 
     match &ast[0] {
@@ -46,13 +51,19 @@ pub fn parse_sql(sql: &str) -> Result<SQLCommand, String> {
                             values,
                         })
                     } else {
-                        Err("No values provided for insert".to_string())
+                        Err(FerrousDBError::ParseError(
+                            "No values provided for insert".to_string(),
+                        ))
                     }
                 } else {
-                    Err("Unsupported INSERT format".to_string())
+                    Err(FerrousDBError::ParseError(
+                        "Unsupported INSERT format".to_string(),
+                    ))
                 }
             } else {
-                Err("No values provided for insert".to_string())
+                Err(FerrousDBError::ParseError(
+                    "No values provided for insert".to_string(),
+                ))
             }
         }
         Statement::Query(query) => {
@@ -68,7 +79,9 @@ pub fn parse_sql(sql: &str) -> Result<SQLCommand, String> {
                                 if let Ok(parsed_limit) = n.parse::<usize>() {
                                     page_size = parsed_limit;
                                 } else {
-                                    return Err("Invalid number in LIMIT clause".to_string());
+                                    return Err(FerrousDBError::ParseError(
+                                        "Invalid number in LIMIT clause".to_string(),
+                                    ));
                                 }
                             }
                         }
@@ -82,7 +95,9 @@ pub fn parse_sql(sql: &str) -> Result<SQLCommand, String> {
                                         page += 1;
                                     }
                                 } else {
-                                    return Err("Invalid number in OFFSET clause".to_string());
+                                    return Err(FerrousDBError::ParseError(
+                                        "Invalid number in OFFSET clause".to_string(),
+                                    ));
                                 }
                             }
                         }
@@ -93,19 +108,57 @@ pub fn parse_sql(sql: &str) -> Result<SQLCommand, String> {
                             page,
                         })
                     } else {
-                        Err("Unsupported FROM clause".to_string())
+                        Err(FerrousDBError::ParseError(
+                            "Unsupported FROM clause".to_string(),
+                        ))
                     }
                 } else {
-                    Err("No FROM clause in SELECT statement".to_string())
+                    Err(FerrousDBError::ParseError(
+                        "No FROM clause in SELECT statement".to_string(),
+                    ))
                 }
             } else {
-                Err("Unsupported query type".to_string())
+                Err(FerrousDBError::ParseError(
+                    "Unsupported query type".to_string(),
+                ))
             }
         }
-        Statement::Delete(_) => {
-            // TODO
-            panic!("Not implemented!");
+        Statement::Delete(delete) => {
+            let table_name = "";
+
+            let condition = match &delete.selection {
+                Some(sqlparser::ast::Expr::BinaryOp { left, right, op }) => {
+                    let left_column = match *left.clone() {
+                        sqlparser::ast::Expr::Identifier(value) => value,
+                        _ => {
+                            return Err(FerrousDBError::ParseError(
+                                "Unsupported condition".to_string(),
+                            ))
+                        }
+                    };
+
+                    let right_value = match *right.clone() {
+                        sqlparser::ast::Expr::Value(sqlparser::ast::Value::Number(n, _)) => n,
+                        _ => {
+                            return Err(FerrousDBError::ParseError(
+                                "Unsupported condition".to_string(),
+                            ))
+                        }
+                    };
+
+                    Some(format!("{left_column}{op}{right_value}"))
+                }
+                _ => Some("".to_string()),
+            };
+
+            Ok(SQLCommand::DeleteFrom {
+                table: table_name.to_string(),
+                condition,
+            })
         }
-        _ => Err("Unsupported SQL command".to_string()),
+
+        _ => Err(FerrousDBError::ParseError(
+            "Unsupported SQL command".to_string(),
+        )),
     }
 }
