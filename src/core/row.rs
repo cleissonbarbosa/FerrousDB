@@ -8,7 +8,7 @@ pub enum DataType {
     Float(f64),
     Text(String),
     Boolean(bool),
-    // Add more data types as needed
+    // TODO: Add more data types
 }
 
 impl DataType {

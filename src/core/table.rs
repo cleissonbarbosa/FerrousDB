@@ -6,7 +6,7 @@ use super::row::Row;
 pub struct ColumnSchema {
     pub name: String,
     pub data_type: String,
-    // Additional metadata (e.g., nullable, default value)
+    // TODO: Additional metadata (e.g., nullable, default value)
 }
 
 impl ColumnSchema {
