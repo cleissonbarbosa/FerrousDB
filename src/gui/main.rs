@@ -8,6 +8,7 @@ use ferrous_db::Row;
 mod app_controller;
 mod builder;
 mod gui_widgets;
+mod theme;
 
 #[derive(Clone, Lens, PartialEq)]
 struct FerrousDBState {
@@ -42,16 +43,15 @@ fn main() -> Result<(), PlatformError> {
     };
 
     data.table_names = Arc::new(data.db.tables.clone().into_keys().collect());
-    let main_window = WindowDesc::new(ui_builder()).title(
-        LocalizedString::new("ferrousdb-win-title")
-            .with_placeholder("FerrousDB - A Database write in rust"),
-    );
-    AppLauncher::with_window(main_window)
+    
+    let window = WindowDesc::new(ui_builder())
+        .title(LocalizedString::new("ferrousdb-win-title").with_placeholder("FerrousDB"))
+        .window_size((1024.0, 768.0))
+        .with_min_size((800.0, 600.0));
+
+    AppLauncher::with_window(window)
         .configure_env(|env, _| {
-            env.set(
-                druid::theme::UI_FONT,
-                druid::FontDescriptor::default().with_size(14.0),
-            );
+            theme::configure_env(env);
         })
         .log_to_console()
         .launch(data)
