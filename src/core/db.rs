@@ -9,14 +9,12 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     error_handling::FerrousDBError,
+    index::{Index, IndexType},
     row::Row,
-    table::{ColumnSchema, Table},
+    table::{ColumnSchema, Constraint, Table},
     write_ahead_log::WriteAheadLog,
 };
-use crate::core::parser::command::SQLCommand;
-use crate::core::parser::sql_parser::parse_sql;
-use crate::{core::bptree::BPTree, DataType};
-use super::index::{Index, IndexType};
+use crate::{core::parser::command::SQLCommand, core::parser::sql_parser::parse_sql, DataType};
 
 pub enum PageResult<'a> {
     TableNotFound,
@@ -76,8 +74,15 @@ impl FerrousDB {
         Ok(())
     }
 
-    pub fn create_index(&mut self, table_name: &str, column_name: &str, index_type: IndexType) -> Result<(), FerrousDBError> {
-        let table = self.tables.get(table_name)
+    pub fn create_index(
+        &mut self,
+        table_name: &str,
+        column_name: &str,
+        index_type: IndexType,
+    ) -> Result<(), FerrousDBError> {
+        let table = self
+            .tables
+            .get(table_name)
             .ok_or_else(|| FerrousDBError::TableNotFound(table_name.to_string()))?;
 
         // Verify column exists
@@ -100,11 +105,82 @@ impl FerrousDB {
         Ok(())
     }
 
+    fn validate_constraints(
+        &self,
+        table_name: &str,
+        values: &HashMap<String, DataType>,
+    ) -> Result<(), FerrousDBError> {
+        let table = self
+            .tables
+            .get(table_name)
+            .ok_or_else(|| FerrousDBError::TableNotFound(table_name.to_string()))?;
+
+        for column in &table.schema {
+            for constraint in &column.constraints {
+                match constraint {
+                    Constraint::NotNull => {
+                        if !values.contains_key(&column.name) {
+                            return Err(FerrousDBError::ConstraintViolation(format!(
+                                "NOT NULL constraint failed: {}",
+                                column.name
+                            )));
+                        }
+                    }
+                    Constraint::Unique => {
+                        if let Some(value) = values.get(&column.name) {
+                            for row in &table.rows {
+                                if let Some(existing_value) = row.data.get(&column.name) {
+                                    if existing_value == value {
+                                        return Err(FerrousDBError::ConstraintViolation(format!(
+                                            "UNIQUE constraint failed: {}",
+                                            column.name
+                                        )));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Constraint::ForeignKey {
+                        ref_table,
+                        ref_column,
+                    } => {
+                        if let Some(value) = values.get(&column.name) {
+                            let referenced_table = self
+                                .tables
+                                .get(ref_table)
+                                .ok_or_else(|| FerrousDBError::TableNotFound(ref_table.clone()))?;
+
+                            let found = referenced_table.rows.iter().any(|row| {
+                                if let Some(ref_value) = row.data.get(ref_column) {
+                                    ref_value == value
+                                } else {
+                                    false
+                                }
+                            });
+
+                            if !found {
+                                return Err(FerrousDBError::ConstraintViolation(format!(
+                                    "FOREIGN KEY constraint failed: {} references {}.{}",
+                                    column.name, ref_table, ref_column
+                                )));
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub fn insert_into(
         &mut self,
         table_name: &str,
         values: HashMap<String, DataType>,
     ) -> Result<(), FerrousDBError> {
+        // Validate constraints before inserting
+        self.validate_constraints(table_name, &values)?;
+
         if let Some(table) = self.tables.get_mut(table_name) {
             // Check data types match the schema
             for (column_name, value) in &values {
@@ -118,7 +194,9 @@ impl FerrousDB {
                 }
             }
             let row_index = table.rows.len();
-            let row = Row { data: values.clone() };
+            let row = Row {
+                data: values.clone(),
+            };
             table.rows.push(row);
 
             // Update indexes
@@ -142,7 +220,12 @@ impl FerrousDB {
         assignments: HashMap<String, DataType>,
         condition: Option<String>,
     ) -> Result<usize, FerrousDBError> {
-        let table = self.tables.get_mut(table_name)
+        // Validate constraints before updating
+        self.validate_constraints(table_name, &assignments)?;
+
+        let table = self
+            .tables
+            .get_mut(table_name)
             .ok_or_else(|| FerrousDBError::TableNotFound(table_name.to_string()))?;
 
         let mut updated_count = 0;
@@ -151,10 +234,28 @@ impl FerrousDB {
                 Some(cond) => {
                     let parts: Vec<&str> = cond.split('=').collect();
                     if parts.len() != 2 {
-                        return Err(FerrousDBError::ParseError("Invalid condition format".to_string()));
+                        return Err(FerrousDBError::ParseError(
+                            "Invalid condition format".to_string(),
+                        ));
                     }
-                    if let Some(value) = row.data.get(parts[0]) {
-                        value.get_value() == parts[1].trim_matches('\'')
+                    if let Some(value) = row.data.get(parts[0].trim()) {
+                        match value {
+                            DataType::Integer(n) => {
+                                if let Ok(comparison_value) = parts[1].trim().trim_matches('\'').parse::<i64>() {
+                                    *n == comparison_value
+                                } else {
+                                    false
+                                }
+                            },
+                            DataType::Text(s) => s == parts[1].trim().trim_matches('\''),
+                            DataType::Boolean(b) => {
+                                if let Ok(comparison_value) = parts[1].trim().trim_matches('\'').parse::<bool>() {
+                                    *b == comparison_value
+                                } else {
+                                    false
+                                }
+                            }
+                        }
                     } else {
                         false
                     }
@@ -193,7 +294,9 @@ impl FerrousDB {
         table_name: &str,
         condition: Option<String>,
     ) -> Result<usize, FerrousDBError> {
-        let table = self.tables.get_mut(table_name)
+        let table = self
+            .tables
+            .get_mut(table_name)
             .ok_or_else(|| FerrousDBError::TableNotFound(table_name.to_string()))?;
 
         let initial_count = table.rows.len();
@@ -203,14 +306,33 @@ impl FerrousDB {
         if let Some(cond) = condition {
             let parts: Vec<&str> = cond.split('=').collect();
             if parts.len() != 2 {
-                return Err(FerrousDBError::ParseError("Invalid condition format".to_string()));
+                return Err(FerrousDBError::ParseError(
+                    "Invalid condition format".to_string(),
+                ));
             }
-            let column = parts[0];
-            let value = parts[1].trim_matches('\'');
+            let column = parts[0].trim();
+            let value = parts[1].trim().trim_matches('\'');
 
             for (idx, row) in table.rows.iter().enumerate() {
                 if let Some(row_value) = row.data.get(column) {
-                    if row_value.get_value() == value {
+                    let should_delete = match row_value {
+                        DataType::Integer(n) => {
+                            if let Ok(comparison_value) = value.parse::<i64>() {
+                                *n == comparison_value
+                            } else {
+                                false
+                            }
+                        },
+                        DataType::Text(s) => s == value,
+                        DataType::Boolean(b) => {
+                            if let Ok(comparison_value) = value.parse::<bool>() {
+                                *b == comparison_value
+                            } else {
+                                false
+                            }
+                        }
+                    };
+                    if should_delete {
                         rows_to_delete.push(idx);
                     }
                 }
@@ -264,12 +386,14 @@ impl FerrousDB {
                 let mut grouped_rows = HashMap::new();
                 for row in rows {
                     if let Some(value) = row.data.get(&group_by_col) {
-                        grouped_rows.entry(value.clone())
+                        grouped_rows
+                            .entry(value.clone())
                             .or_insert_with(Vec::new)
                             .push(row);
                     }
                 }
-                rows = grouped_rows.into_iter()
+                rows = grouped_rows
+                    .into_iter()
                     .map(|(_, group)| group[0])
                     .collect();
             }
@@ -289,7 +413,7 @@ impl FerrousDB {
 
             let start = (page_number - 1) * page_size;
             let end = start + page_size;
-            
+
             if start >= rows.len() {
                 PageResult::PageOutOfRange
             } else {
@@ -352,11 +476,23 @@ impl FerrousDB {
                     Err(e) => Err(e),
                 }
             }
-            SQLCommand::Update { table, assignments, condition } => {
-                match self.update(&table, assignments, condition) {
-                    Ok(count) => Ok(format!("{} row(s) updated in table '{}'", count, table)),
-                    Err(e) => Err(e),
-                }
+            SQLCommand::Update {
+                table,
+                assignments,
+                condition,
+            } => match self.update(&table, assignments, condition) {
+                Ok(count) => Ok(format!("{} row(s) updated in table '{}'", count, table)),
+                Err(e) => Err(e),
+            },
+            SQLCommand::CreateView {
+                name,
+                query,
+                columns,
+            } => {
+                // Por enquanto apenas retornamos um erro indicando que a feature não está implementada
+                Err(FerrousDBError::ParseError(
+                    "Views are not implemented yet".to_string(),
+                ))
             }
         }
     }
@@ -380,18 +516,25 @@ impl FerrousDB {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+
+    fn setup() -> FerrousDB {
+        // Remove any existing test database file
+        let _ = fs::remove_file("data.ferrous");
+        FerrousDB::new()
+    }
 
     #[test]
     fn test_create_table() {
-        let mut db = FerrousDB::new();
-        db.create_table(
+        let mut db = setup();
+        let result = db.create_table(
             "users",
             vec![
                 ColumnSchema::new("name".to_string(), "TEXT".to_string()),
                 ColumnSchema::new("age".to_string(), "INTEGER".to_string()),
             ],
-        )
-        .unwrap();
+        );
+        assert!(result.is_ok());
         assert_eq!(db.tables.len(), 1);
         assert_eq!(
             db.tables.get("users").unwrap().schema,
@@ -404,19 +547,22 @@ mod tests {
 
     #[test]
     fn test_insert_into() {
-        let mut db = FerrousDB::new();
-        db.create_table(
+        let mut db = setup();
+        let create_result = db.create_table(
             "users",
             vec![
                 ColumnSchema::new("name".to_string(), "TEXT".to_string()),
                 ColumnSchema::new("age".to_string(), "INTEGER".to_string()),
             ],
-        )
-        .unwrap();
+        );
+        assert!(create_result.is_ok());
+
         let mut values = HashMap::new();
         values.insert("name".to_string(), DataType::Text("Alice".to_string()));
         values.insert("age".to_string(), DataType::Integer(30));
-        db.insert_into("users", values).unwrap();
+        let insert_result = db.insert_into("users", values);
+        assert!(insert_result.is_ok());
+
         assert_eq!(db.tables.get("users").unwrap().rows.len(), 1);
         let row = &db.tables.get("users").unwrap().rows[0];
         assert_eq!(row.data.get("name").unwrap().get_value(), "Alice");
@@ -425,22 +571,23 @@ mod tests {
 
     #[test]
     fn test_select_from_with_limit_and_offset() {
-        let mut db = FerrousDB::new();
-        db.create_table(
+        let mut db = setup();
+        let create_result = db.create_table(
             "users",
             vec![
                 ColumnSchema::new("name".to_string(), "TEXT".to_string()),
                 ColumnSchema::new("age".to_string(), "INTEGER".to_string()),
             ],
-        )
-        .unwrap();
+        );
+        assert!(create_result.is_ok());
 
         // Insert 5 users
         for i in 1..=5 {
             let mut values = HashMap::new();
             values.insert("name".to_string(), DataType::Text(format!("User{}", i)));
             values.insert("age".to_string(), DataType::Integer(20 + i));
-            db.insert_into("users", values).unwrap();
+            let insert_result = db.insert_into("users", values);
+            assert!(insert_result.is_ok());
         }
 
         // Test with limit 2 and offset 1
@@ -451,17 +598,88 @@ mod tests {
                 assert_eq!(rows[0].data.get("name").unwrap().get_value(), "User3");
                 assert_eq!(rows[1].data.get("name").unwrap().get_value(), "User4");
             }
-            _ => {}
+            _ => panic!("Expected PageResult::Page"),
         };
 
         // Test with limit 3 and offset 3
         let table = db.get_page("users", 3, 2, None, None);
         match table {
             PageResult::Page(rows) => {
-                assert_eq!(rows.len(), 1); // Only 2 rows left
+                assert_eq!(rows.len(), 1); // Only 1 row left
                 assert_eq!(rows[0].data.get("name").unwrap().get_value(), "User5");
             }
-            _ => {}
+            _ => panic!("Expected PageResult::Page"),
         };
+    }
+
+    #[test]
+    fn test_update() {
+        let mut db = setup();
+        let create_result = db.create_table(
+            "users",
+            vec![
+                ColumnSchema::new("name".to_string(), "TEXT".to_string()),
+                ColumnSchema::new("age".to_string(), "INTEGER".to_string()),
+            ],
+        );
+        assert!(create_result.is_ok());
+
+        // Insert initial data
+        let mut values = HashMap::new();
+        values.insert("name".to_string(), DataType::Text("Alice".to_string()));
+        values.insert("age".to_string(), DataType::Integer(30));
+        let insert_result = db.insert_into("users", values);
+        assert!(insert_result.is_ok());
+
+        // Verify initial data
+        match db.get_page("users", 1, 10, None, None) {
+            PageResult::Page(rows) => {
+                assert_eq!(rows.len(), 1);
+                assert_eq!(rows[0].data.get("name").unwrap().get_value(), "Alice");
+                assert_eq!(rows[0].data.get("age").unwrap().get_value(), "30");
+            }
+            _ => panic!("Expected to find inserted row"),
+        }
+
+        // Perform update
+        let mut assignments = HashMap::new();
+        assignments.insert("age".to_string(), DataType::Integer(31));
+        let update_result = db.update("users", assignments, Some("name = 'Alice'".to_string()));
+        assert!(update_result.is_ok());
+        assert_eq!(update_result.unwrap(), 1); // Should update exactly 1 row
+
+        // Verify the update was successful
+        match db.get_page("users", 1, 10, None, None) {
+            PageResult::Page(rows) => {
+                assert_eq!(rows.len(), 1);
+                assert_eq!(rows[0].data.get("name").unwrap().get_value(), "Alice");
+                assert_eq!(rows[0].data.get("age").unwrap().get_value(), "31");
+            }
+            _ => panic!("Expected to find the updated row"),
+        }
+    }
+
+    #[test]
+    fn test_delete_from() {
+        let mut db = setup();
+        let create_result = db.create_table(
+            "users",
+            vec![
+                ColumnSchema::new("name".to_string(), "TEXT".to_string()),
+                ColumnSchema::new("age".to_string(), "INTEGER".to_string()),
+            ],
+        );
+        assert!(create_result.is_ok());
+
+        let mut values = HashMap::new();
+        values.insert("name".to_string(), DataType::Text("Alice".to_string()));
+        values.insert("age".to_string(), DataType::Integer(30));
+        let insert_result = db.insert_into("users", values);
+        assert!(insert_result.is_ok());
+
+        let delete_result = db.delete_from("users", Some("name = 'Alice'".to_string()));
+        assert!(delete_result.is_ok());
+
+        assert_eq!(db.tables.get("users").unwrap().rows.len(), 0);
     }
 }

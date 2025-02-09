@@ -25,4 +25,7 @@ pub enum FerrousDBError {
 
     #[error("Recover Error: '{0}'")]
     RecoveryError(String),
+
+    #[error("Constraint violation: {0}")]
+    ConstraintViolation(String),
 }

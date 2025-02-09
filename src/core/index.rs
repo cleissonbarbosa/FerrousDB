@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use crate::DataType;
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct Index {
     table_name: String,
     column_name: String,
@@ -10,7 +10,7 @@ pub struct Index {
     entries: HashMap<DataType, Vec<usize>>,  // Maps values to row indices
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub enum IndexType {
     BTree,
     Hash,

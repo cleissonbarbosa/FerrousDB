@@ -5,4 +5,5 @@ pub mod index;
 pub mod parser;
 pub mod row;
 pub mod table;
+pub mod view;
 pub mod write_ahead_log;

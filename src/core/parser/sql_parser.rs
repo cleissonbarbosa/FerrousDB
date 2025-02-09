@@ -1,10 +1,8 @@
+use crate::{core::error_handling::FerrousDBError, core::parser::command::SQLCommand, DataType};
+use sqlparser::ast::{Expr, GroupByExpr, Offset, Statement};
 use std::collections::HashMap;
 
-use crate::core::error_handling::FerrousDBError;
-use crate::core::parser::command::SQLCommand;
 use crate::core::table::ColumnSchema;
-use crate::DataType;
-use sqlparser::ast::{Expr, Offset, Statement};
 use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::Parser;
 
@@ -70,17 +68,13 @@ pub fn parse_sql(sql: &str) -> Result<SQLCommand, FerrousDBError> {
                 if let Some(table) = select.from.first() {
                     if let sqlparser::ast::TableFactor::Table { name, .. } = &table.relation {
                         let mut page = 1;
-                        let mut page_size = 1000; // default page size
+                        let mut page_size = 1000;
 
                         // Check for LIMIT clause
                         if let Some(limit) = &query.limit {
                             if let Expr::Value(sqlparser::ast::Value::Number(n, _)) = limit {
                                 if let Ok(parsed_limit) = n.parse::<usize>() {
                                     page_size = parsed_limit;
-                                } else {
-                                    return Err(FerrousDBError::ParseError(
-                                        "Invalid number in LIMIT clause".to_string(),
-                                    ));
                                 }
                             }
                         }
@@ -93,31 +87,36 @@ pub fn parse_sql(sql: &str) -> Result<SQLCommand, FerrousDBError> {
                                     if parsed_offset % page_size != 0 {
                                         page += 1;
                                     }
-                                } else {
-                                    return Err(FerrousDBError::ParseError(
-                                        "Invalid number in OFFSET clause".to_string(),
-                                    ));
                                 }
                             }
                         }
 
                         // Parse GROUP BY
-                        let group_by = query.group_by.first().and_then(|expr| {
-                            if let Expr::Identifier(ident) = expr {
-                                Some(ident.value.clone())
-                            } else {
-                                None
+                        let group_by = match &select.group_by {
+                            GroupByExpr::Expressions(exprs, _modifiers) => {
+                                exprs.first().and_then(|expr| {
+                                    if let Expr::Identifier(ident) = expr {
+                                        Some(ident.value.clone())
+                                    } else {
+                                        None
+                                    }
+                                })
                             }
-                        });
+                            _ => None,
+                        };
 
                         // Parse ORDER BY
-                        let order_by = query.order_by.first().map(|ord| {
-                            if let Expr::Identifier(ident) = &ord.expr {
-                                (ident.value.clone(), !ord.asc.unwrap_or(true))
-                            } else {
-                                (String::new(), true)
-                            }
-                        });
+                        let order_by = query
+                            .order_by
+                            .as_ref()
+                            .and_then(|orders| orders.exprs.first())
+                            .and_then(|order| {
+                                if let Expr::Identifier(ident) = &order.expr {
+                                    Some((ident.value.clone(), !order.asc.unwrap_or(true)))
+                                } else {
+                                    None
+                                }
+                            });
 
                         Ok(SQLCommand::SelectFrom {
                             table: name.to_string(),
@@ -142,74 +141,108 @@ pub fn parse_sql(sql: &str) -> Result<SQLCommand, FerrousDBError> {
                 ))
             }
         }
-        Statement::Update(update) => {
-            let table_name = update.table.to_string();
-            let mut assignments = HashMap::new();
+        Statement::Update {
+            table,
+            assignments,
+            selection,
+            ..
+        } => {
+            let table_name = table.to_string();
+            let mut update_assignments = HashMap::new();
 
-            for assignment in &update.assignments {
-                if let Expr::Identifier(col) = &assignment.id {
-                    if let Expr::Value(value) = &assignment.value {
-                        match value {
-                            sqlparser::ast::Value::Number(n, _) => {
-                                assignments.insert(col.value.clone(), DataType::Integer(n.parse().unwrap()));
+            for assignment in assignments {
+                match &assignment.target {
+                    target => {
+                        if let Expr::Value(value) = &assignment.value {
+                            let column_name = target.to_string();
+                            match value {
+                                sqlparser::ast::Value::Number(n, _) => {
+                                    update_assignments
+                                        .insert(column_name, DataType::Integer(n.parse().unwrap()));
+                                }
+                                sqlparser::ast::Value::SingleQuotedString(s) => {
+                                    update_assignments
+                                        .insert(column_name, DataType::Text(s.clone()));
+                                }
+                                _ => {
+                                    return Err(FerrousDBError::ParseError(
+                                        "Unsupported value type".to_string(),
+                                    ))
+                                }
                             }
-                            sqlparser::ast::Value::SingleQuotedString(s) => {
-                                assignments.insert(col.value.clone(), DataType::Text(s.clone()));
-                            }
-                            _ => return Err(FerrousDBError::ParseError("Unsupported value type".to_string())),
                         }
                     }
                 }
             }
 
-            let condition = match &update.selection {
-                Some(expr) => match expr {
-                    Expr::BinaryOp { left, op, right } => {
-                        if let Expr::Identifier(id) = &**left {
-                            if let Expr::Value(value) = &**right {
-                                Some(format!("{}={}", id.value, value))
-                            } else {
-                                None
-                            }
+            let condition = selection.as_ref().and_then(|expr| {
+                if let Expr::BinaryOp { left, op, right } = expr {
+                    if let Expr::Identifier(id) = left.as_ref() {
+                        if let Expr::Value(value) = right.as_ref() {
+                            Some(format!("{}={}", id.value, value))
                         } else {
                             None
                         }
+                    } else {
+                        None
                     }
-                    _ => None,
-                },
-                None => None,
-            };
+                } else {
+                    None
+                }
+            });
 
             Ok(SQLCommand::Update {
                 table: table_name,
-                assignments,
+                assignments: update_assignments,
                 condition,
             })
         }
         Statement::Delete(delete) => {
-            let table_name = delete.table_name.to_string();
+            let table_name = if let Some(using) = &delete.using {
+                if let Some(table) = using.first() {
+                    table.relation.to_string()
+                } else {
+                    delete.tables[0].to_string()
+                }
+            } else {
+                delete.tables[0].to_string()
+            };
 
-            let condition = match &delete.selection {
-                Some(expr) => match expr {
-                    Expr::BinaryOp { left, op, right } => {
-                        if let Expr::Identifier(id) = &**left {
-                            if let Expr::Value(value) = &**right {
-                                Some(format!("{}={}", id.value, value))
-                            } else {
-                                None
-                            }
+            let condition = delete.selection.as_ref().and_then(|expr| {
+                if let Expr::BinaryOp { left, op, right } = expr {
+                    if let Expr::Identifier(id) = left.as_ref() {
+                        if let Expr::Value(value) = right.as_ref() {
+                            Some(format!("{}={}", id.value, value))
                         } else {
                             None
                         }
+                    } else {
+                        None
                     }
-                    _ => None,
-                },
-                None => None,
-            };
+                } else {
+                    None
+                }
+            });
 
             Ok(SQLCommand::DeleteFrom {
                 table: table_name,
                 condition,
+            })
+        }
+        Statement::CreateView {
+            name,
+            columns,
+            query,
+            ..
+        } => {
+            let view_name = name.to_string();
+            let column_names = columns.iter().map(|c| c.to_string()).collect();
+            let view_query = query.to_string();
+
+            Ok(SQLCommand::CreateView {
+                name: view_name,
+                query: view_query,
+                columns: column_names,
             })
         }
         _ => Err(FerrousDBError::ParseError(
