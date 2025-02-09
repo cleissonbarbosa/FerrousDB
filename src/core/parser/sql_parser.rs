@@ -101,10 +101,30 @@ pub fn parse_sql(sql: &str) -> Result<SQLCommand, FerrousDBError> {
                             }
                         }
 
+                        // Parse GROUP BY
+                        let group_by = query.group_by.first().and_then(|expr| {
+                            if let Expr::Identifier(ident) = expr {
+                                Some(ident.value.clone())
+                            } else {
+                                None
+                            }
+                        });
+
+                        // Parse ORDER BY
+                        let order_by = query.order_by.first().map(|ord| {
+                            if let Expr::Identifier(ident) = &ord.expr {
+                                (ident.value.clone(), !ord.asc.unwrap_or(true))
+                            } else {
+                                (String::new(), true)
+                            }
+                        });
+
                         Ok(SQLCommand::SelectFrom {
                             table: name.to_string(),
                             page_size,
                             page,
+                            group_by,
+                            order_by,
                         })
                     } else {
                         Err(FerrousDBError::ParseError(
@@ -122,40 +142,76 @@ pub fn parse_sql(sql: &str) -> Result<SQLCommand, FerrousDBError> {
                 ))
             }
         }
-        Statement::Delete(delete) => {
-            let table_name = "";
+        Statement::Update(update) => {
+            let table_name = update.table.to_string();
+            let mut assignments = HashMap::new();
 
-            let condition = match &delete.selection {
-                Some(sqlparser::ast::Expr::BinaryOp { left, right, op }) => {
-                    let left_column = match *left.clone() {
-                        sqlparser::ast::Expr::Identifier(value) => value,
-                        _ => {
-                            return Err(FerrousDBError::ParseError(
-                                "Unsupported condition".to_string(),
-                            ))
+            for assignment in &update.assignments {
+                if let Expr::Identifier(col) = &assignment.id {
+                    if let Expr::Value(value) = &assignment.value {
+                        match value {
+                            sqlparser::ast::Value::Number(n, _) => {
+                                assignments.insert(col.value.clone(), DataType::Integer(n.parse().unwrap()));
+                            }
+                            sqlparser::ast::Value::SingleQuotedString(s) => {
+                                assignments.insert(col.value.clone(), DataType::Text(s.clone()));
+                            }
+                            _ => return Err(FerrousDBError::ParseError("Unsupported value type".to_string())),
                         }
-                    };
-
-                    let right_value = match *right.clone() {
-                        sqlparser::ast::Expr::Value(sqlparser::ast::Value::Number(n, _)) => n,
-                        _ => {
-                            return Err(FerrousDBError::ParseError(
-                                "Unsupported condition".to_string(),
-                            ))
-                        }
-                    };
-
-                    Some(format!("{left_column}{op}{right_value}"))
+                    }
                 }
-                _ => Some("".to_string()),
+            }
+
+            let condition = match &update.selection {
+                Some(expr) => match expr {
+                    Expr::BinaryOp { left, op, right } => {
+                        if let Expr::Identifier(id) = &**left {
+                            if let Expr::Value(value) = &**right {
+                                Some(format!("{}={}", id.value, value))
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                },
+                None => None,
             };
 
-            Ok(SQLCommand::DeleteFrom {
-                table: table_name.to_string(),
+            Ok(SQLCommand::Update {
+                table: table_name,
+                assignments,
                 condition,
             })
         }
+        Statement::Delete(delete) => {
+            let table_name = delete.table_name.to_string();
 
+            let condition = match &delete.selection {
+                Some(expr) => match expr {
+                    Expr::BinaryOp { left, op, right } => {
+                        if let Expr::Identifier(id) = &**left {
+                            if let Expr::Value(value) = &**right {
+                                Some(format!("{}={}", id.value, value))
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                },
+                None => None,
+            };
+
+            Ok(SQLCommand::DeleteFrom {
+                table: table_name,
+                condition,
+            })
+        }
         _ => Err(FerrousDBError::ParseError(
             "Unsupported SQL command".to_string(),
         )),

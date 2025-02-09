@@ -16,6 +16,7 @@ use super::{
 use crate::core::parser::command::SQLCommand;
 use crate::core::parser::sql_parser::parse_sql;
 use crate::{core::bptree::BPTree, DataType};
+use super::index::{Index, IndexType};
 
 pub enum PageResult<'a> {
     TableNotFound,
@@ -27,7 +28,7 @@ pub enum PageResult<'a> {
 /// Represents the FerrousDB database.
 pub struct FerrousDB {
     pub tables: HashMap<String, Table>,
-    pub indexs: HashMap<String, BPTree>,
+    pub indexes: HashMap<String, Index>,
     is_loaded: bool,
 }
 
@@ -49,7 +50,7 @@ impl FerrousDB {
             Ok(db) => db,
             Err(_) => FerrousDB {
                 tables: HashMap::new(),
-                indexs: HashMap::new(),
+                indexes: HashMap::new(),
                 is_loaded: false,
             },
         }
@@ -75,24 +76,28 @@ impl FerrousDB {
         Ok(())
     }
 
-    pub fn create_index(
-        &mut self,
-        table_name: &str,
-        column_name: &str,
-    ) -> Result<(), FerrousDBError> {
-        if let Some(table) = self.tables.get_mut(table_name) {
-            let column_schema = table
-                .schema
-                .iter()
-                .find(|col| &col.name == &column_name)
-                .ok_or(FerrousDBError::ColumnNotFound(column_name.to_string()))?;
+    pub fn create_index(&mut self, table_name: &str, column_name: &str, index_type: IndexType) -> Result<(), FerrousDBError> {
+        let table = self.tables.get(table_name)
+            .ok_or_else(|| FerrousDBError::TableNotFound(table_name.to_string()))?;
 
-            let index = BPTree::new(column_schema.data_type.clone().parse().unwrap());
-            self.indexs.insert(column_name.to_string(), index);
-            Ok(())
-        } else {
-            Err(FerrousDBError::TableNotFound(table_name.to_string()))
+        // Verify column exists
+        if !table.schema.iter().any(|col| col.name == column_name) {
+            return Err(FerrousDBError::ColumnNotFound(column_name.to_string()));
         }
+
+        let index_name = format!("{}_{}", table_name, column_name);
+        let mut index = Index::new(table_name.to_string(), column_name.to_string(), index_type);
+
+        // Build initial index
+        for (row_idx, row) in table.rows.iter().enumerate() {
+            if let Some(value) = row.data.get(column_name) {
+                index.insert(value.clone(), row_idx);
+            }
+        }
+
+        self.indexes.insert(index_name, index);
+        self.save_to_file("data.ferrous")?;
+        Ok(())
     }
 
     pub fn insert_into(
@@ -112,39 +117,128 @@ impl FerrousDB {
                     return Err(FerrousDBError::TypeMismatch(column_name.clone()));
                 }
             }
-            let row = Row { data: values };
+            let row_index = table.rows.len();
+            let row = Row { data: values.clone() };
             table.rows.push(row);
-            self.save_to_file("data.ferrous")
-                .expect("Failed to save to file");
+
+            // Update indexes
+            for (column_name, value) in values {
+                let index_name = format!("{}_{}", table_name, column_name);
+                if let Some(index) = self.indexes.get_mut(&index_name) {
+                    index.insert(value, row_index);
+                }
+            }
+
+            self.save_to_file("data.ferrous")?;
             Ok(())
         } else {
             Err(FerrousDBError::TableNotFound(table_name.to_string()))
         }
     }
 
+    pub fn update(
+        &mut self,
+        table_name: &str,
+        assignments: HashMap<String, DataType>,
+        condition: Option<String>,
+    ) -> Result<usize, FerrousDBError> {
+        let table = self.tables.get_mut(table_name)
+            .ok_or_else(|| FerrousDBError::TableNotFound(table_name.to_string()))?;
+
+        let mut updated_count = 0;
+        for (row_idx, row) in table.rows.iter_mut().enumerate() {
+            let should_update = match &condition {
+                Some(cond) => {
+                    let parts: Vec<&str> = cond.split('=').collect();
+                    if parts.len() != 2 {
+                        return Err(FerrousDBError::ParseError("Invalid condition format".to_string()));
+                    }
+                    if let Some(value) = row.data.get(parts[0]) {
+                        value.get_value() == parts[1].trim_matches('\'')
+                    } else {
+                        false
+                    }
+                }
+                None => true,
+            };
+
+            if should_update {
+                // Update indexes before modifying the row
+                for (col, new_value) in &assignments {
+                    let index_name = format!("{}_{}", table_name, col);
+                    if let Some(index) = self.indexes.get_mut(&index_name) {
+                        if let Some(old_value) = row.data.get(col) {
+                            index.update(old_value, new_value.clone(), row_idx);
+                        }
+                    }
+                }
+
+                // Update the row
+                for (col, value) in &assignments {
+                    if !table.schema.iter().any(|c| &c.name == col) {
+                        return Err(FerrousDBError::ColumnNotFound(col.clone()));
+                    }
+                    row.data.insert(col.clone(), value.clone());
+                }
+                updated_count += 1;
+            }
+        }
+
+        self.save_to_file("data.ferrous")?;
+        Ok(updated_count)
+    }
+
     pub fn delete_from(
         &mut self,
         table_name: &str,
-        condition: Option<Box<dyn Fn(&Row) -> bool>>,
-    ) -> Result<usize, String> {
-        if let Some(table) = self.tables.get_mut(table_name) {
-            let initial_count = table.rows.len();
+        condition: Option<String>,
+    ) -> Result<usize, FerrousDBError> {
+        let table = self.tables.get_mut(table_name)
+            .ok_or_else(|| FerrousDBError::TableNotFound(table_name.to_string()))?;
 
-            if let Some(cond) = condition {
-                table.rows.retain(|row| !cond(row));
-            } else {
-                table.rows.clear();
+        let initial_count = table.rows.len();
+        let mut rows_to_delete = Vec::new();
+
+        // First pass: identify rows to delete
+        if let Some(cond) = condition {
+            let parts: Vec<&str> = cond.split('=').collect();
+            if parts.len() != 2 {
+                return Err(FerrousDBError::ParseError("Invalid condition format".to_string()));
             }
+            let column = parts[0];
+            let value = parts[1].trim_matches('\'');
 
-            let deleted_count = initial_count - table.rows.len();
-
-            self.save_to_file("data.ferrous")
-                .map_err(|e| format!("Failed to save to file: {}", e))?;
-
-            Ok(deleted_count)
+            for (idx, row) in table.rows.iter().enumerate() {
+                if let Some(row_value) = row.data.get(column) {
+                    if row_value.get_value() == value {
+                        rows_to_delete.push(idx);
+                    }
+                }
+            }
         } else {
-            Err(format!("Table '{}' not found", table_name))
+            rows_to_delete.extend(0..table.rows.len());
         }
+
+        // Update indexes
+        for idx in &rows_to_delete {
+            let row = &table.rows[*idx];
+            for (col_name, value) in &row.data {
+                let index_name = format!("{}_{}", table_name, col_name);
+                if let Some(index) = self.indexes.get_mut(&index_name) {
+                    index.remove(value, *idx);
+                }
+            }
+        }
+
+        // Remove rows in reverse order to maintain correct indices
+        rows_to_delete.sort_unstable_by(|a, b| b.cmp(a));
+        for idx in rows_to_delete {
+            table.rows.remove(idx);
+        }
+
+        let deleted_count = initial_count - table.rows.len();
+        self.save_to_file("data.ferrous")?;
+        Ok(deleted_count)
     }
 
     pub fn get_page(
@@ -152,6 +246,8 @@ impl FerrousDB {
         table_name: &str,
         page_number: usize,
         page_size: usize,
+        group_by: Option<String>,
+        order_by: Option<(String, bool)>,
     ) -> PageResult {
         if !self.is_loaded {
             if let Ok(mut db) = FerrousDB::load_from_file("data.ferrous") {
@@ -160,10 +256,44 @@ impl FerrousDB {
             }
         }
 
-        if let Some(table) = self.tables.iter().find(|t| t.1.name == table_name) {
-            match table.1.get_page(page_number, page_size) {
-                Some(page) => PageResult::Page(page),
-                None => PageResult::PageOutOfRange,
+        if let Some(table) = self.tables.get(table_name) {
+            let mut rows: Vec<&Row> = table.rows.iter().collect();
+
+            // Apply GROUP BY if specified
+            if let Some(group_by_col) = group_by {
+                let mut grouped_rows = HashMap::new();
+                for row in rows {
+                    if let Some(value) = row.data.get(&group_by_col) {
+                        grouped_rows.entry(value.clone())
+                            .or_insert_with(Vec::new)
+                            .push(row);
+                    }
+                }
+                rows = grouped_rows.into_iter()
+                    .map(|(_, group)| group[0])
+                    .collect();
+            }
+
+            // Apply ORDER BY if specified
+            if let Some((col, is_ascending)) = order_by {
+                rows.sort_by(|a, b| {
+                    let a_val = a.data.get(&col).map(|v| v.get_value());
+                    let b_val = b.data.get(&col).map(|v| v.get_value());
+                    if is_ascending {
+                        a_val.cmp(&b_val)
+                    } else {
+                        b_val.cmp(&a_val)
+                    }
+                });
+            }
+
+            let start = (page_number - 1) * page_size;
+            let end = start + page_size;
+            
+            if start >= rows.len() {
+                PageResult::PageOutOfRange
+            } else {
+                PageResult::Page(rows[start..end.min(rows.len())].to_vec())
             }
         } else {
             PageResult::TableNotFound
@@ -195,7 +325,9 @@ impl FerrousDB {
                 table,
                 page_size,
                 page,
-            } => match self.get_page(&table, page, page_size) {
+                group_by,
+                order_by,
+            } => match self.get_page(&table, page, page_size, group_by, order_by) {
                 PageResult::TableNotFound => Err(FerrousDBError::TableNotFound(format!(
                     "Table '{}' not found",
                     table
@@ -215,17 +347,15 @@ impl FerrousDB {
                 }
             },
             SQLCommand::DeleteFrom { table, condition } => {
-                let condition_fn = condition.map(|c| {
-                    Box::new(move |row: &Row| {
-                        // This is a simple implementation. You might want to expand this
-                        // to handle more complex conditions.
-                        row.data.iter().any(|(k, v)| format!("{}={}", k, v) == c)
-                    }) as Box<dyn Fn(&Row) -> bool>
-                });
-
-                match self.delete_from(&table, condition_fn) {
+                match self.delete_from(&table, condition) {
                     Ok(count) => Ok(format!("{} row(s) deleted from table '{}'", count, table)),
-                    Err(e) => Err(FerrousDBError::ParseError(e)),
+                    Err(e) => Err(e),
+                }
+            }
+            SQLCommand::Update { table, assignments, condition } => {
+                match self.update(&table, assignments, condition) {
+                    Ok(count) => Ok(format!("{} row(s) updated in table '{}'", count, table)),
+                    Err(e) => Err(e),
                 }
             }
         }
@@ -314,7 +444,7 @@ mod tests {
         }
 
         // Test with limit 2 and offset 1
-        let table = db.get_page("users", 2, 2);
+        let table = db.get_page("users", 2, 2, None, None);
         match table {
             PageResult::Page(rows) => {
                 assert_eq!(rows.len(), 2);
@@ -325,7 +455,7 @@ mod tests {
         };
 
         // Test with limit 3 and offset 3
-        let table = db.get_page("users", 3, 2);
+        let table = db.get_page("users", 3, 2, None, None);
         match table {
             PageResult::Page(rows) => {
                 assert_eq!(rows.len(), 1); // Only 2 rows left

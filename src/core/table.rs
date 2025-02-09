@@ -3,21 +3,49 @@ use serde::{Deserialize, Serialize};
 use super::row::Row;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub enum Constraint {
+    NotNull,
+    Unique,
+    PrimaryKey,
+    ForeignKey {
+        ref_table: String,
+        ref_column: String,
+    },
+    Check(String),  // Expression to check
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct ColumnSchema {
     pub name: String,
     pub data_type: String,
-    // TODO: Additional metadata (e.g., nullable, default value)
+    pub constraints: Vec<Constraint>,
 }
 
 impl ColumnSchema {
     pub fn new(name: String, data_type: String) -> Self {
-        ColumnSchema { name, data_type }
+        ColumnSchema { 
+            name, 
+            data_type,
+            constraints: Vec::new(),
+        }
+    }
+
+    pub fn with_constraints(name: String, data_type: String, constraints: Vec<Constraint>) -> Self {
+        ColumnSchema {
+            name,
+            data_type,
+            constraints,
+        }
     }
 }
 
 impl std::fmt::Display for ColumnSchema {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} ({})", self.name, self.data_type)
+        write!(f, "{} {}", self.name, self.data_type)?;
+        for constraint in &self.constraints {
+            write!(f, " {:?}", constraint)?;
+        }
+        Ok(())
     }
 }
 
@@ -26,12 +54,23 @@ impl std::str::FromStr for ColumnSchema {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let parts: Vec<_> = s.split_whitespace().collect();
-        if parts.len() != 2 {
+        if parts.len() < 2 {
             return Err(std::fmt::Error);
         }
         let name = parts[0].to_string();
         let data_type = parts[1].to_string();
-        Ok(ColumnSchema { name, data_type })
+        
+        let mut constraints = Vec::new();
+        for &part in &parts[2..] {
+            match part.to_uppercase().as_str() {
+                "NOT NULL" => constraints.push(Constraint::NotNull),
+                "UNIQUE" => constraints.push(Constraint::Unique),
+                "PRIMARY KEY" => constraints.push(Constraint::PrimaryKey),
+                _ => {}
+            }
+        }
+        
+        Ok(ColumnSchema { name, data_type, constraints })
     }
 }
 

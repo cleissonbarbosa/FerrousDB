@@ -1,7 +1,8 @@
-mod bptree;
+pub mod bptree;
 pub mod db;
-mod error_handling;
+pub mod error_handling;
+pub mod index;
 pub mod parser;
 pub mod row;
 pub mod table;
-mod write_ahead_log;
+pub mod write_ahead_log;
